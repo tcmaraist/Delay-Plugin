@@ -19,7 +19,8 @@ KadenzeDelayAudioProcessor::KadenzeDelayAudioProcessor()
                       #endif
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
-                       )
+                       ),
+    mIsPingPongEnabled(true)
 #endif
 {
     addParameter(mDryWetParameter = new juce::AudioParameterFloat("drywet",
@@ -42,6 +43,7 @@ KadenzeDelayAudioProcessor::KadenzeDelayAudioProcessor()
     
     
     mDelayTimeSmoothed = 0;
+    mDelayTimeOffset = 0.005;
     mCircularBufferLeft = nullptr;
     mCircularBufferRight = nullptr;
     mCircularBufferWriteHead = 0;
@@ -190,54 +192,65 @@ void KadenzeDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
+    // clear any output channels that don't contain input data
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
     
+    // get pointers to the left and right channels of the audio buffer
     float* leftChannel = buffer.getWritePointer(0);
     float* rightChannel = buffer.getWritePointer(1);
 
+    // iterate through each sample in the audio buffer
     for (int i = 0; i < buffer.getNumSamples(); i++) {
+        // smooth the delay time parameter
         mDelayTimeSmoothed = mDelayTimeSmoothed - 0.001 * (mDelayTimeSmoothed - *mDelayTimeParameter);
-        
+        // calculate delay time in samples based on current smoothed delay time
         mDelayTimeInSamples = getSampleRate() * mDelayTimeSmoothed;
         
+        // write input samples to circular buffer with feedback
         mCircularBufferLeft[mCircularBufferWriteHead] = leftChannel[i] + mFeedbackLeft;
         mCircularBufferRight[mCircularBufferWriteHead] = rightChannel[i] + mFeedbackRight;
         
+        // calculate read head position in circular
         mDelayReadHead = mCircularBufferWriteHead - mDelayTimeInSamples;
         
+        // handle wrap-around if read head position position is negative
         if (mDelayReadHead < 0) {
             mDelayReadHead += mCircularBufferLength;
         }
-        
+        // intergear and fractional parts of the read head position
         int readHead_x = (int)mDelayReadHead;
-        
         int readHead_x1 = readHead_x + 1;
-        
         float readHeadFloat = mDelayReadHead - readHead_x;
 
-        
+        // hand wrap-around for the next sample if necessary
         if (readHead_x1 >=mCircularBufferLength) {
             readHead_x1 -= mCircularBufferLength;
         }
-                
+        
+        // perform linear interpolation to get the delayed samples
         float delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x], mCircularBufferLeft[readHead_x1], readHeadFloat);
         float delay_sample_right = lin_interp(mCircularBufferRight[readHead_x], mCircularBufferRight[readHead_x1], readHeadFloat);
         
+        // update feedback values based on the delayed samples
         mFeedbackLeft = delay_sample_left * *mFeedbackParameter;
         mFeedbackRight = delay_sample_right * *mFeedbackParameter;
         
+        // increment circular buffer write head
         mCircularBufferWriteHead++;
         
-        buffer.setSample(0, i, buffer.getSample(0, i) * (1 - *mDryWetParameter) + delay_sample_left * *mDryWetParameter);
-        buffer.setSample(1, i, buffer.getSample(1, i) * (1 - *mDryWetParameter) + delay_sample_left * *mDryWetParameter);
+        // ping pong effect
+        if (mIsPingPongEnabled) {
+            float temp = mFeedbackLeft;
+            mFeedbackLeft = mFeedbackRight;
+            mFeedbackRight = temp;
+        }
         
+        // apply dry-wet mix to the output samples and update the audio buffer
+        buffer.setSample(0, i, buffer.getSample(0, i) * (1 - *mDryWetParameter) + delay_sample_left * *mDryWetParameter);
+        buffer.setSample(1, i, buffer.getSample(1, i) * (1 - *mDryWetParameter) + delay_sample_right * *mDryWetParameter);
+        
+        // handle wrap-around for circular buffer write head
         if (mCircularBufferWriteHead >= mCircularBufferLength) {
             mCircularBufferWriteHead = 0;
         }

@@ -61,7 +61,8 @@ public:
     float lin_interp(float sample_x, float sample_x1, float inPhase);
 
 private:
-    
+    bool mIsPingPongEnabled;
+    float mDelayTimeOffset;
     float mDelayTimeSmoothed;
     
     juce::AudioParameterFloat* mDryWetParameter;
