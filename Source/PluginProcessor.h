@@ -62,20 +62,27 @@ public:
 
 private:
     bool mIsPingPongEnabled;
-    float mDelayTimeOffset;
-    float mDelayTimeSmoothed;
+    
+    float mDelayTimeLeftSmoothed;
+    float mDelayTimeRightSmoothed;
+
     
     juce::AudioParameterFloat* mDryWetParameter;
     juce::AudioParameterFloat* mFeedbackParameter;
-    juce::AudioParameterFloat* mDelayTimeParameter; 
+    juce::AudioParameterFloat* mDelayTimeLeftParameter;
+    juce::AudioParameterFloat* mDelayTimeRightParameter;
     
     float mFeedbackLeft;
     float mFeedbackRight;
     
-    float mDelayTimeInSamples;
-    float mDelayReadHead;
+    float mDelayTimeLeftInSamples;
+    float mDelayTimeRightInSamples;
+    float mDelayReadHeadLeft;
+    float mDelayReadHeadRight;
     
-    int mCircularBufferWriteHead;
+    int mCircularBufferWriteHeadLeft;
+    int mCircularBufferWriteHeadRight;
+
     int mCircularBufferLength;
     
     float* mCircularBufferLeft;

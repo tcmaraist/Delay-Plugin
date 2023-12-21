@@ -35,21 +35,33 @@ KadenzeDelayAudioProcessor::KadenzeDelayAudioProcessor()
                                                                     0.98,
                                                                     0.5));
     
-    addParameter(mDelayTimeParameter = new juce::AudioParameterFloat("delayTIme",
-                                                                     "Delay Time",
+    addParameter(mDelayTimeLeftParameter = new juce::AudioParameterFloat("delayTimeLeft",
+                                                                     "Delay Time Left",
                                                                      0.01,
                                                                      MAX_DELAY_TIME,
                                                                      0.5));
+    addParameter(mDelayTimeRightParameter = new juce::AudioParameterFloat("delayTimeRight",
+                                                                     "Delay Time Right",
+                                                                     0.01,
+                                                                     MAX_DELAY_TIME,
+                                                                     1.0));
+
     
     
-    mDelayTimeSmoothed = 0;
-    mDelayTimeOffset = 0.005;
+    mDelayTimeLeftSmoothed = 0;
+    mDelayTimeRightSmoothed = 0;
+    
     mCircularBufferLeft = nullptr;
     mCircularBufferRight = nullptr;
-    mCircularBufferWriteHead = 0;
+    mCircularBufferWriteHeadLeft = 0;
+    mCircularBufferWriteHeadRight = 0;
+
     mCircularBufferLength = 0;
-    mDelayTimeInSamples = 0;
-    mDelayReadHead = 0;
+    mDelayTimeLeftInSamples = 0;
+    mDelayTimeRightInSamples = 0;
+
+    mDelayReadHeadLeft = 0;
+    mDelayReadHeadRight = 0;
     
     mFeedbackLeft = 0;
     mFeedbackRight = 0;
@@ -133,7 +145,8 @@ void KadenzeDelayAudioProcessor::changeProgramName (int index, const juce::Strin
 //==============================================================================
 void KadenzeDelayAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    mDelayTimeInSamples = sampleRate * *mDelayTimeParameter;
+    mDelayTimeLeftInSamples = sampleRate * *mDelayTimeLeftParameter;
+    mDelayTimeRightInSamples = sampleRate * *mDelayTimeRightParameter;
     
     mCircularBufferLength = sampleRate * MAX_DELAY_TIME;
     
@@ -149,9 +162,12 @@ void KadenzeDelayAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     
     juce::zeromem(mCircularBufferRight, mCircularBufferLength * sizeof(float));
     
-    mCircularBufferWriteHead = 0;
+    mCircularBufferWriteHeadLeft = 0;
+    mCircularBufferWriteHeadRight = 0;
     
-    mDelayTimeSmoothed = *mDelayTimeParameter;
+    mDelayTimeLeftSmoothed = *mDelayTimeLeftParameter;
+    mDelayTimeRightSmoothed = *mDelayTimeRightParameter;
+
 }
 
 void KadenzeDelayAudioProcessor::releaseResources()
@@ -203,56 +219,74 @@ void KadenzeDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // iterate through each sample in the audio buffer
     for (int i = 0; i < buffer.getNumSamples(); i++) {
         // smooth the delay time parameter
-        mDelayTimeSmoothed = mDelayTimeSmoothed - 0.001 * (mDelayTimeSmoothed - *mDelayTimeParameter);
+        mDelayTimeLeftSmoothed = mDelayTimeLeftSmoothed - 0.001 * (mDelayTimeLeftSmoothed - *mDelayTimeLeftParameter);
+        mDelayTimeRightSmoothed = mDelayTimeRightSmoothed - 0.001 * (mDelayTimeRightSmoothed - *mDelayTimeRightParameter);
+
         // calculate delay time in samples based on current smoothed delay time
-        mDelayTimeInSamples = getSampleRate() * mDelayTimeSmoothed;
+        mDelayTimeLeftInSamples = getSampleRate() * mDelayTimeLeftSmoothed;
+        mDelayTimeRightInSamples = getSampleRate() * mDelayTimeRightSmoothed;
+
         
         // write input samples to circular buffer with feedback
-        mCircularBufferLeft[mCircularBufferWriteHead] = leftChannel[i] + mFeedbackLeft;
-        mCircularBufferRight[mCircularBufferWriteHead] = rightChannel[i] + mFeedbackRight;
+        mCircularBufferLeft[mCircularBufferWriteHeadLeft] = rightChannel[i] + mFeedbackRight;
+        mCircularBufferRight[mCircularBufferWriteHeadRight] =  leftChannel[i] + mFeedbackLeft;
         
         // calculate read head position in circular
-        mDelayReadHead = mCircularBufferWriteHead - mDelayTimeInSamples;
+        mDelayReadHeadLeft = mCircularBufferWriteHeadLeft - mDelayTimeLeftInSamples;
+        mDelayReadHeadRight = mCircularBufferWriteHeadRight - mDelayTimeRightInSamples;
+
         
         // handle wrap-around if read head position position is negative
-        if (mDelayReadHead < 0) {
-            mDelayReadHead += mCircularBufferLength;
+        if (mDelayReadHeadLeft < 0 ) {
+            mDelayReadHeadLeft += mCircularBufferLength;
+        }
+        
+        if (mDelayReadHeadRight < 0) {
+            mDelayReadHeadRight += mCircularBufferLength;
         }
         // intergear and fractional parts of the read head position
-        int readHead_x = (int)mDelayReadHead;
-        int readHead_x1 = readHead_x + 1;
-        float readHeadFloat = mDelayReadHead - readHead_x;
+        int readHeadL_x = (int)mDelayReadHeadLeft;
+        int readHeadL_x1 = readHeadL_x + 1;
+        float readHeadFloatL = mDelayReadHeadLeft - readHeadL_x;
+        
+        int readHeadR_x = (int)mDelayReadHeadRight;
+        int readHeadR_x1 = readHeadR_x + 1;
+        float readHeadFloatR = mDelayReadHeadRight - readHeadR_x;
+
 
         // hand wrap-around for the next sample if necessary
-        if (readHead_x1 >=mCircularBufferLength) {
-            readHead_x1 -= mCircularBufferLength;
+        if (readHeadL_x1 >=mCircularBufferLength) {
+            readHeadL_x1 -= mCircularBufferLength;
+        }
+        
+        if ( readHeadR_x1 >= mCircularBufferLength) {
+            readHeadR_x1 -= mCircularBufferLength;
         }
         
         // perform linear interpolation to get the delayed samples
-        float delay_sample_left = lin_interp(mCircularBufferLeft[readHead_x], mCircularBufferLeft[readHead_x1], readHeadFloat);
-        float delay_sample_right = lin_interp(mCircularBufferRight[readHead_x], mCircularBufferRight[readHead_x1], readHeadFloat);
+        float delay_sample_left = lin_interp(mCircularBufferLeft[readHeadL_x], mCircularBufferLeft[readHeadL_x1], readHeadFloatL);
+        float delay_sample_right = lin_interp(mCircularBufferRight[readHeadR_x], mCircularBufferRight[readHeadR_x1], readHeadFloatR);
         
         // update feedback values based on the delayed samples
         mFeedbackLeft = delay_sample_left * *mFeedbackParameter;
         mFeedbackRight = delay_sample_right * *mFeedbackParameter;
         
         // increment circular buffer write head
-        mCircularBufferWriteHead++;
-        
-        // ping pong effect
-        if (mIsPingPongEnabled) {
-            float temp = mFeedbackLeft;
-            mFeedbackLeft = mFeedbackRight;
-            mFeedbackRight = temp;
-        }
+        mCircularBufferWriteHeadLeft++;
+        mCircularBufferWriteHeadRight++;
+
         
         // apply dry-wet mix to the output samples and update the audio buffer
         buffer.setSample(0, i, buffer.getSample(0, i) * (1 - *mDryWetParameter) + delay_sample_left * *mDryWetParameter);
         buffer.setSample(1, i, buffer.getSample(1, i) * (1 - *mDryWetParameter) + delay_sample_right * *mDryWetParameter);
         
         // handle wrap-around for circular buffer write head
-        if (mCircularBufferWriteHead >= mCircularBufferLength) {
-            mCircularBufferWriteHead = 0;
+        if (mCircularBufferWriteHeadLeft >= mCircularBufferLength) {
+            mCircularBufferWriteHeadLeft = 0;
+        }
+        
+        if (mCircularBufferWriteHeadRight >= mCircularBufferLength ) {
+            mCircularBufferWriteHeadRight = 0;
         }
     }
 }
